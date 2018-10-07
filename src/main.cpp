@@ -28,7 +28,7 @@ void interpret_command(char command, int32_t value);
 void setup()
 {
     Serial.begin(0);
-    fs = new FastStepper_t(8,7);
+    fs = new FastStepper_t(9, 8, 7);
 
     // Set reasonable defaults
     fs->set_max_speed(40000);

@@ -4,42 +4,33 @@
 #include <util/atomic.h>
 
 #include "FastStepper.h"
-#include "pin_definitions.h"
 
 FastStepper_t * FastStepper_t::instance_ptrs[] = {nullptr, nullptr};
-
-// float FastStepper_t::acceleration = 100;
-// int32_t FastStepper_t::max_speed = 8000000;
-// volatile int32_t FastStepper_t::target_speed = 0;
-// volatile int32_t FastStepper_t::target_position = 0;
-// volatile int32_t FastStepper_t::decelerate_at = 0;
-// volatile int32_t FastStepper_t::current_position = 0;
-// volatile float FastStepper_t::current_position_virtual_offset = 0;
-// volatile bool FastStepper_t::current_position_virtual_offset_valid = false;
-// volatile int32_t FastStepper_t::current_speed = 0;
-// volatile bool FastStepper_t::position_mode = false;
-// volatile bool FastStepper_t::has_active_target = false;
-// volatile bool FastStepper_t::is_rising_edge_isr = true;
-// volatile uint32_t FastStepper_t::time_of_last_step = 0;
-// volatile int32_t FastStepper_t::pos_run_initial_pos = 0;
-// volatile int32_t FastStepper_t::pos_run_initial_speed = 0;
-// float FastStepper_t::speed_run_current_speed_float = 0;
-// uint32_t FastStepper_t::speed_run_last_acceleration_adjustment_time = 0;
-// volatile int8_t FastStepper_t::stepping_direction = -1;
-
 
 // Constructor.
 // Sets up Stepper. Pulse pin must be A9.
 // Only when these are const (or const pointer respectively), the compiler will
 // optimize into a single SBI/CBI instruction for setting pins.
 // TODO: pin invert options
-FastStepper_t::FastStepper_t(uint8_t pin_direction, uint8_t pin_enable) :
-    _timer(TIMER_1_INSTANCE),
+FastStepper_t::FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pin_enable) :
+    _timer(
+        digital_pin_to_timer_PGM[pin_step]==TIMER1A?
+            TIMER_1_INSTANCE
+        : digital_pin_to_timer_PGM[pin_step]==TIMER3A?
+            TIMER_3_INSTANCE
+        :
+            INVALID ),
     _pin_enable_bitmask(pin_enable==0xFF?0x00:digital_pin_to_bit_mask_PGM[pin_enable]),
     _pin_enable_port(pin_enable==0xFF?nullptr:(uint8_t *) port_to_output_PGM[digital_pin_to_port_PGM[pin_enable]]),
     _pin_direction_bitmask(digital_pin_to_bit_mask_PGM[pin_direction]),
-    _pin_direction_port((uint8_t *) port_to_output_PGM[digital_pin_to_port_PGM[pin_direction]])
+    _pin_direction_port((uint8_t *) port_to_output_PGM[digital_pin_to_port_PGM[pin_direction]]),
+    _TCCRnB((volatile uint8_t *) (_timer==TIMER_1_INSTANCE?TCCR1B:TCCR3B)),
+    _OCRnA((volatile uint16_t *) (_timer==TIMER_1_INSTANCE?OCR1A:OCR3A))
 {
+    // Only some pins have the hardware capabilities this library needs.
+    if(_timer == INVALID)
+        return;
+
     FastStepper_t::instance_ptrs[_timer] = this;
 
     // reasonable defaults:
@@ -52,8 +43,6 @@ FastStepper_t::FastStepper_t(uint8_t pin_direction, uint8_t pin_enable) :
     // Set up pins
     // Set direction pin as output
     pinMode(pin_direction, OUTPUT);
-    // We use PB5 (OCR1A) (Arduino D9) as step pin. Set to output.
-    bitWrite(DDRB, PB5, OUTPUT);
     // only set up enable pin if it was explicitly defined (default value os 0xFF)
     if(pin_enable != 0xFF)
     {
@@ -61,13 +50,31 @@ FastStepper_t::FastStepper_t(uint8_t pin_direction, uint8_t pin_enable) :
         digitalWrite(pin_enable, LOW);
     }
 
-    // Set up Timer 1, which will control Stepper A's pulses
-    // Fast PWM mode (15) with TOP=OCRnA. No clock source.
-    // Toggle OC1A on Compare Match, OC1B and OC1C disconnected (normal port operation)
-    TCCR1B = _BV(WGM13) | _BV(WGM12);
-    TCCR1A = _BV(WGM11) | _BV(WGM10) | _BV(COM1A0);
-    // Interrupt on Output Compare Match A
-    TIMSK1 = _BV(OCIE1A);
+    if(_timer == TIMER_1_INSTANCE)
+    {
+        // We'll use PB5 (OCR1A) (Arduino D9) as step pin. Set to output.
+        bitWrite(DDRB, PB5, OUTPUT);
+        // Set up Timer 1, which will control Stepper A's pulses
+        // Fast PWM mode (15) with TOP=OCRnA. No clock source.
+        // Toggle OC1A on Compare Match, OC1B and OC1C disconnected (normal port operation)
+        TCCR1B = _BV(WGM13) | _BV(WGM12);
+        TCCR1A = _BV(WGM11) | _BV(WGM10) | _BV(COM1A0);
+        // Interrupt on Output Compare Match A
+        TIMSK1 = _BV(OCIE1A);
+    }
+    else if(_timer == TIMER_3_INSTANCE)
+    {
+        // We'll use PB5 (OCR3A) (Arduino D5) as step pin. Set to output.
+        bitWrite(DDRC, PC6, OUTPUT);
+        // Set up Timer 3, which will control Stepper B's pulses
+        // Fast PWM mode (15) with TOP=OCRnA. No clock source.
+        // Toggle OC1A on Compare Match, OC1B and OC1C disconnected (normal port operation)
+        TCCR3B = _BV(WGM33) | _BV(WGM32);
+        TCCR3A = _BV(WGM31) | _BV(WGM30) | _BV(COM3A0);
+        // Interrupt on Output Compare Match A
+        TIMSK3 = _BV(OCIE3A);
+    }
+    // OC1B, OC1C, OC3B, OC3C are not supported right now (there is no hardware toggle)
 
     // Enable interrupts
     sei();
@@ -233,8 +240,8 @@ void FastStepper_t::set_target_position(int32_t target_position)
 
 void FastStepper_t::set_speed(int32_t new_speed)
 {
-    uint8_t TCCR1B_tmp = TCCR1B;
-    TCCR1B_tmp &= 0b11111000; // clear lower 3 bits
+    uint8_t TCCRnB_tmp = *_TCCRnB;
+    TCCRnB_tmp &= 0b11111000; // clear lower 3 bits
 
     int32_t new_speed_tmp = new_speed;
 
@@ -251,30 +258,30 @@ void FastStepper_t::set_speed(int32_t new_speed)
     if(new_speed_tmp >= 245) // (16e6/new_speed)/1<65535
     {
         // prescaler=1;
-        TCCR1B_tmp |= 0b001;
+        TCCRnB_tmp |= 0b001;
         top = 16e6/new_speed_tmp - 1; // round would be better, but floor will do
     }
     else if(new_speed >= 31) // (16e6/new_speed)/8<65535
     {
         // prescaler=8;
-        TCCR1B_tmp |= 0b010;
+        TCCRnB_tmp |= 0b010;
         top = 2e6/new_speed_tmp - 1;
     }
     else if(new_speed >= 4) // (16e6/new_speed)/64<65535
     {
         // prescaler=64;
-        TCCR1B_tmp |= 0b011;
+        TCCRnB_tmp |= 0b011;
         top = 250000/new_speed_tmp - 1;
     }
     else if(new_speed >= 1) // (16e6/new_speed)/256<65535
     {
         // prescaler=256;
-        TCCR1B_tmp |= 0b100;
+        TCCRnB_tmp |= 0b100;
         top = 62500/new_speed_tmp - 1;
     }
     else
     {
-        // we can't get a speed this low. timer will be stopped (TCCR1B_tmp & 0x7 = 0).
+        // we can't get a speed this low. timer will be stopped (TCCRnB_tmp & 0x7 = 0).
         top = 0xFFFF;
     }
 
@@ -298,15 +305,15 @@ void FastStepper_t::set_speed(int32_t new_speed)
 
             // set new timer frequency.
             // set new prescaler setting
-            TCCR1B = TCCR1B_tmp;
-            // Since we're in Fast PWM mode, OCR1A defines TOP. Setting a new OCR1A
-            // that is lower than TCNT1 will thus set TOV1 and reset TCNT1.
-            OCR1A = top;
+            *_TCCRnB = TCCRnB_tmp;
+            // Since we're in Fast PWM mode, OCRnA defines TOP. Setting a new OCRnA
+            // that is lower than TCNTn will thus set TOVn and reset TCNTn.
+            *_OCRnA = top;
         
             _current_speed = new_speed;
 
-            Serial.print("New TCCR1B = 0b"); Serial.println(TCCR1B, 2);
-            Serial.print("New OCR1A = 0x"); Serial.println(OCR1A, 16);
+            Serial.print("New TCCRnB = 0b"); Serial.println(*_TCCRnB, 2);
+            Serial.print("New OCRnA = 0x"); Serial.println(*_OCRnA, 16);
             Serial.print("New _current_speed = "); Serial.println(_current_speed, 10);
         }
     }
@@ -315,30 +322,39 @@ void FastStepper_t::set_speed(int32_t new_speed)
 // This ISR is called on every OC1A toggle
 ISR(TIMER1_COMPA_vect)
 {
-    FastStepper_t * const fs = FastStepper_t::instance_ptrs[FastStepper_t::TIMER_1_INSTANCE];
+    FastStepper_t::instance_ptrs[FastStepper_t::TIMER_1_INSTANCE]->_isr();
+}
+
+// This ISR is called on every OC3A toggle
+ISR(TIMER3_COMPA_vect)
+{
+    FastStepper_t::instance_ptrs[FastStepper_t::TIMER_3_INSTANCE]->_isr();
+}
+
+inline void FastStepper_t::_isr()
+{
     // The ISR will execute for every edge, but a step occurs only at a rising edge
-    // fs->_is_rising_edge_isr = ~fs->_is_rising_edge_isr;
-    if(!(fs->_is_rising_edge_isr++ & 0x01))
+    if(!(_is_rising_edge_isr++ & 0x01))
     {
         return;
     }
 
     // Depending on the output state of the dir pin, increment or decrement a step
-   fs->_current_position += fs->_stepping_direction;
+   _current_position += _stepping_direction;
 
     // If we're in (active) position mode
-    if(fs->_position_mode && fs->_has_active_target)
+    if(_position_mode && _has_active_target)
     {
-        fs->_current_position_virtual_offset_valid = false;
-        fs->_time_of_last_step = millis();
+        _current_position_virtual_offset_valid = false;
+        _time_of_last_step = millis();
 
-        if(fs->_current_position == fs->_target_position)
+        if(_current_position == _target_position)
         {
             // the below lines are faster than a call to set_speed(0)
-            fs->_target_speed = 0;
-            fs->_current_speed = 0;
-            fs->_has_active_target = false;
-            TCCR1B &= 0b11111000; // stop timer
+            _target_speed = 0;
+            _current_speed = 0;
+            _has_active_target = false;
+            *_TCCRnB &= 0b11111000; // stop timer
         }
     }
 }

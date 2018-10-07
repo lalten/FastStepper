@@ -2,13 +2,14 @@
 
 #include <inttypes.h>
 
+// forward-declare ISRs
 extern "C" void TIMER1_COMPA_vect(void) __attribute__ ((signal));
-extern "C" void TIMER4_OVF_vect(void) __attribute__ ((signal));
+extern "C" void TIMER3_COMPA_vect(void) __attribute__ ((signal));
 
 class FastStepper_t
 {
 public:
-    FastStepper_t(uint8_t pin_direction, uint8_t pin_enable=0xFF);
+    FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pin_enable=0xFF);
     ~FastStepper_t();
 
     void run();
@@ -28,16 +29,18 @@ public:
     int32_t get_target_speed() { return _target_speed; }
     int32_t get_target_position() { return _target_position; }
 
+    // Declare ISRs friend of this class so it can access all members
     friend void TIMER1_COMPA_vect(void);
-    friend void TIMER4_OVF_vect(void);
+    friend void TIMER3_COMPA_vect(void);
 
 private:
-    static FastStepper_t * instance_ptrs[2];
-    enum instance_t {TIMER_1_INSTANCE=0, TIMER_3_INSTANCE=1};
+    enum instance_t {INVALID=-1, TIMER_1_INSTANCE, TIMER_3_INSTANCE, NUM_TIMERS};
+    static FastStepper_t * instance_ptrs[NUM_TIMERS];
 
     void set_speed(int32_t freq);
     void run_position_target();
     void run_speed_target();
+    void _isr();
 
     // basic settings
     float _acceleration;
@@ -67,11 +70,10 @@ private:
     uint8_t * const _pin_enable_port;
     const uint8_t _pin_direction_bitmask;
     uint8_t * const _pin_direction_port;
+    volatile uint8_t * const _TCCRnB;
+    volatile uint16_t * const _OCRnA;
 
     // hardware states
     volatile uint8_t _is_rising_edge_isr = false;
     volatile int8_t _stepping_direction = 1;
 };
-
-// extern FastStepper_t FastStepperA(8,7);
-// extern FastStepper_t FastStepperB(5,4);
