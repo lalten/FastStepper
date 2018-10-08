@@ -2,7 +2,11 @@
 
 #include <FastStepper.h>
 
-FastStepper_t *fs;
+const uint8_t PIN_STEPPER_ENA = 7;
+const uint8_t PIN_STEPPER_STP = 9;
+const uint8_t PIN_STEPPER_DIR = 8;
+
+FastStepper_t *fs; // = FastStepper_t::create<PIN_STEPPER_STP>(PIN_STEPPER_DIR, PIN_STEPPER_ENA);
 
 const char CMD_WRITE_ACCEL = 'a';
 const char CMD_WRITE_MAX_SPEED = 'm';
@@ -17,10 +21,6 @@ const char CMD_READ_ABS_VEL = 'C';
 const char CMD_READ_REL_VEL = 'c';
 const char CMD_WRITE_ENABLE = 'e';
 
-const uint8_t PIN_STEPPER_ENA = 7;
-const uint8_t PIN_STEPPER_STP = 8;
-const uint8_t PIN_STEPPER_DIR = 9;
-
 char serial_buffer[255] = {0};
 uint8_t serial_buffer_len = 0;
 
@@ -32,7 +32,11 @@ void interpret_command(char command, int32_t value);
 void setup()
 {
     Serial.begin(0);
-    fs = new FastStepper_t(PIN_STEPPER_STP, PIN_STEPPER_DIR, PIN_STEPPER_ENA);
+
+    // while(!Serial.available());
+
+    // Create FastStepper instance
+    fs = FastStepper_t::create<PIN_STEPPER_STP>(PIN_STEPPER_DIR, PIN_STEPPER_ENA);
 
     // Set reasonable defaults
     fs->set_max_speed(40000);
@@ -81,7 +85,7 @@ void interpret_command(char command, int32_t value)
             break;
         case CMD_WRITE_QUICKSTOP: // quickstop
             fs->quickstop();
-            value =  fs->get_current_position();
+            value = fs->get_current_position();
             break;
         case CMD_READ_ABS_VEL: // read current speed
             value = fs->get_current_speed();
@@ -90,7 +94,7 @@ void interpret_command(char command, int32_t value)
             value = fs->get_current_speed() - last_target_vel;
             break;
         case CMD_READ_ABS_POS: // read current position
-            value =  fs->get_current_position();
+            value = fs->get_current_position();
             break;
         case CMD_READ_REL_POS: // read current speed
             value = fs->get_current_position() - last_target_pos;

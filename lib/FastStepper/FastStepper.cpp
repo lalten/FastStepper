@@ -5,33 +5,26 @@
 
 #include "FastStepper.h"
 
+// The static array to pointers of the two FastStepper instances possible
 FastStepper_t * FastStepper_t::instance_ptrs[] = {nullptr, nullptr};
 
 // Constructor.
-// Sets up Stepper. Pulse pin must be A9.
-// Only when these are const (or const pointer respectively), the compiler will
-// optimize into a single SBI/CBI instruction for setting pins.
 // TODO: pin invert options
 FastStepper_t::FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pin_enable) :
-    _timer(
-        digital_pin_to_timer_PGM[pin_step]==TIMER1A?
-            TIMER_1_INSTANCE
-        : digital_pin_to_timer_PGM[pin_step]==TIMER3A?
-            TIMER_3_INSTANCE
-        :
-            INVALID ),
+    _timer(digitalPinToTimer(pin_step)),
     _pin_enable_bitmask(pin_enable==0xFF?0x00:digital_pin_to_bit_mask_PGM[pin_enable]),
     _pin_enable_port(pin_enable==0xFF?nullptr:(uint8_t *) port_to_output_PGM[digital_pin_to_port_PGM[pin_enable]]),
     _pin_direction_bitmask(digital_pin_to_bit_mask_PGM[pin_direction]),
     _pin_direction_port((uint8_t *) port_to_output_PGM[digital_pin_to_port_PGM[pin_direction]]),
-    _TCCRnB((volatile uint8_t *) (_timer==TIMER_1_INSTANCE?TCCR1B:TCCR3B)),
-    _OCRnA((volatile uint16_t *) (_timer==TIMER_1_INSTANCE?OCR1A:OCR3A))
+    _TCCRnB((uint8_t *) (uintptr_t) (_timer==TIMER1A?&TCCR1B:&TCCR3B)),
+    _OCRnA((uint16_t *) (uintptr_t) (_timer==TIMER1A?&OCR1A:&OCR3A))
 {
-    // Only some pins have the hardware capabilities this library needs.
-    if(_timer == INVALID)
-        return;
-
-    FastStepper_t::instance_ptrs[_timer] = this;
+    // If another FastStepper instance was already using this timer delete it lest we leak memory
+    if(get_instance_ptr(_timer))
+    {
+        delete get_instance_ptr(_timer);
+    }
+    set_instance_ptr(_timer, this);
 
     // reasonable defaults:
     _current_speed = 0;
@@ -43,17 +36,16 @@ FastStepper_t::FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pi
     // Set up pins
     // Set direction pin as output
     pinMode(pin_direction, OUTPUT);
-    // only set up enable pin if it was explicitly defined (default value os 0xFF)
+    // only set up enable pin if it was explicitly defined (default value is 0xFF)
     if(pin_enable != 0xFF)
     {
         pinMode(pin_enable, OUTPUT);
         digitalWrite(pin_enable, LOW);
     }
 
-    if(_timer == TIMER_1_INSTANCE)
+    pinMode(pin_step, OUTPUT);
+    if(_timer == TIMER1A)
     {
-        // We'll use PB5 (OCR1A) (Arduino D9) as step pin. Set to output.
-        bitWrite(DDRB, PB5, OUTPUT);
         // Set up Timer 1, which will control Stepper A's pulses
         // Fast PWM mode (15) with TOP=OCRnA. No clock source.
         // Toggle OC1A on Compare Match, OC1B and OC1C disconnected (normal port operation)
@@ -62,10 +54,8 @@ FastStepper_t::FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pi
         // Interrupt on Output Compare Match A
         TIMSK1 = _BV(OCIE1A);
     }
-    else if(_timer == TIMER_3_INSTANCE)
+    else if(_timer == TIMER3A)
     {
-        // We'll use PB5 (OCR3A) (Arduino D5) as step pin. Set to output.
-        bitWrite(DDRC, PC6, OUTPUT);
         // Set up Timer 3, which will control Stepper B's pulses
         // Fast PWM mode (15) with TOP=OCRnA. No clock source.
         // Toggle OC1A on Compare Match, OC1B and OC1C disconnected (normal port operation)
@@ -82,8 +72,15 @@ FastStepper_t::FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pi
 
 FastStepper_t::~FastStepper_t()
 {
-    TIMSK1 &= ~_BV(OCIE1A);
-    FastStepper_t::instance_ptrs[_timer] = nullptr;
+    if(_timer == TIMER1A)
+    {
+        bitClear(TIMSK1, OCIE1A);
+    }
+    if(_timer == TIMER3A)
+    {
+        bitClear(TIMSK3, OCIE3A);
+    }
+    set_instance_ptr(_timer, nullptr);
 }
 
 void FastStepper_t::set_enabled(bool enable)
@@ -311,10 +308,6 @@ void FastStepper_t::set_speed(int32_t new_speed)
             *_OCRnA = top;
         
             _current_speed = new_speed;
-
-            Serial.print("New TCCRnB = 0b"); Serial.println(*_TCCRnB, 2);
-            Serial.print("New OCRnA = 0x"); Serial.println(*_OCRnA, 16);
-            Serial.print("New _current_speed = "); Serial.println(_current_speed, 10);
         }
     }
 }
@@ -322,13 +315,13 @@ void FastStepper_t::set_speed(int32_t new_speed)
 // This ISR is called on every OC1A toggle
 ISR(TIMER1_COMPA_vect)
 {
-    FastStepper_t::instance_ptrs[FastStepper_t::TIMER_1_INSTANCE]->_isr();
+    FastStepper_t::get_instance_ptr(TIMER1A)->_isr();
 }
 
 // This ISR is called on every OC3A toggle
 ISR(TIMER3_COMPA_vect)
 {
-    FastStepper_t::instance_ptrs[FastStepper_t::TIMER_3_INSTANCE]->_isr();
+    FastStepper_t::get_instance_ptr(TIMER3A)->_isr();
 }
 
 inline void FastStepper_t::_isr()
@@ -355,7 +348,7 @@ inline void FastStepper_t::_isr()
             _current_speed = 0;
             _has_active_target = false;
             *_TCCRnB &= 0b11111000; // stop timer
-        }
+       }
     }
 }
 
