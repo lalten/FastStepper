@@ -17,6 +17,10 @@ const char CMD_READ_ABS_VEL = 'C';
 const char CMD_READ_REL_VEL = 'c';
 const char CMD_WRITE_ENABLE = 'e';
 
+const uint8_t PIN_STEPPER_ENA = 7;
+const uint8_t PIN_STEPPER_STP = 8;
+const uint8_t PIN_STEPPER_DIR = 9;
+
 char serial_buffer[255] = {0};
 uint8_t serial_buffer_len = 0;
 
@@ -28,7 +32,7 @@ void interpret_command(char command, int32_t value);
 void setup()
 {
     Serial.begin(0);
-    fs = new FastStepper_t(9, 8, 7);
+    fs = new FastStepper_t(PIN_STEPPER_STP, PIN_STEPPER_DIR, PIN_STEPPER_ENA);
 
     // Set reasonable defaults
     fs->set_max_speed(40000);
