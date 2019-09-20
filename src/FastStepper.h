@@ -83,9 +83,9 @@ private:
     const uint8_t _timer;
     const uint8_t _pin_enable_bitmask;
     uint8_t * const _pin_enable_port;
-    const bool _invert_enable;
     const uint8_t _pin_direction_bitmask;
     uint8_t * const _pin_direction_port;
+    const bool _invert_enable;
     volatile uint8_t * const _TCCRnB;
     volatile uint16_t * const _OCRnA;
 
