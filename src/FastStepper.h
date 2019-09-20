@@ -11,13 +11,13 @@ class FastStepper_t
 public:
     // Factory method, checks if the stepper pin is valid and returns a pointer to a new FastStepper instance
     template <const uint8_t PIN_STEPPER>
-    static FastStepper_t * create(uint8_t pin_direction, uint8_t pin_enable)
+    static FastStepper_t * create(uint8_t pin_direction, uint8_t pin_enable, bool invert_enable = false)
     {
         // This would be way more elegant, but unfortunately digital_pin_to_timer_PGM is not constexpr :'(
         // static_assert(digitalPinToTimer(PIN_STEPPER) == TIMER1A || digitalPinToTimer(PIN_STEPPER) == TIMER3A, "");
         // just hardcode pins for now...
         static_assert(PIN_STEPPER == 9 || PIN_STEPPER == 5, "pin_step must be connected to a supported timer slice (TIMER1A, TIMER3A)");
-        return new FastStepper_t(PIN_STEPPER, pin_direction, pin_enable);
+        return new FastStepper_t(PIN_STEPPER, pin_direction, pin_enable, invert_enable);
     }
 
     // This method must be called periodically from user code (loop()). It handles acceleration curves.
@@ -44,7 +44,7 @@ public:
     friend void TIMER3_COMPA_vect(void);
 
 private:
-    FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pin_enable=0xFF);
+    FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pin_enable = 0xFF, bool invert_enable = false);
     ~FastStepper_t();
 
     // Instance pointers used to modify the correct FastStepper instance inside the ISRs
@@ -83,6 +83,7 @@ private:
     const uint8_t _timer;
     const uint8_t _pin_enable_bitmask;
     uint8_t * const _pin_enable_port;
+    const bool _invert_enable;
     const uint8_t _pin_direction_bitmask;
     uint8_t * const _pin_direction_port;
     volatile uint8_t * const _TCCRnB;

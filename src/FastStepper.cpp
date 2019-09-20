@@ -9,13 +9,14 @@
 FastStepper_t * FastStepper_t::instance_ptrs[] = {nullptr, nullptr};
 
 // Constructor.
-// TODO: pin invert options
-FastStepper_t::FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pin_enable) :
+// TODO: step/dir pin invert options?
+FastStepper_t::FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pin_enable, bool invert_enable) :
     _timer(digitalPinToTimer(pin_step)),
     _pin_enable_bitmask(pin_enable==0xFF?0x00:digital_pin_to_bit_mask_PGM[pin_enable]),
     _pin_enable_port(pin_enable==0xFF?nullptr:(uint8_t *) port_to_output_PGM[digital_pin_to_port_PGM[pin_enable]]),
     _pin_direction_bitmask(digital_pin_to_bit_mask_PGM[pin_direction]),
     _pin_direction_port((uint8_t *) port_to_output_PGM[digital_pin_to_port_PGM[pin_direction]]),
+    _invert_enable(invert_enable),
     _TCCRnB((uint8_t *) (uintptr_t) (_timer==TIMER1A?&TCCR1B:&TCCR3B)),
     _OCRnA((uint16_t *) (uintptr_t) (_timer==TIMER1A?&OCR1A:&OCR3A))
 {
@@ -40,7 +41,7 @@ FastStepper_t::FastStepper_t(uint8_t pin_step, uint8_t pin_direction, uint8_t pi
     if(pin_enable != 0xFF)
     {
         pinMode(pin_enable, OUTPUT);
-        digitalWrite(pin_enable, LOW);
+        set_enabled(false);
     }
 
     pinMode(pin_step, OUTPUT);
@@ -88,8 +89,8 @@ void FastStepper_t::set_enabled(bool enable)
     // If no enable pin was defined, just return
     if(_pin_enable_port == nullptr)
         return;
-    
-    if(enable)
+
+    if (enable == !_invert_enable)
     {
         // set bit
         *_pin_enable_port |= _pin_enable_bitmask;
@@ -107,7 +108,7 @@ bool FastStepper_t::get_enabled()
     if(_pin_enable_port == nullptr)
         return true;
 
-    return *_pin_enable_port & _pin_enable_bitmask;
+    return (*_pin_enable_port & _pin_enable_bitmask) == !_invert_enable;
 }
 
 void FastStepper_t::quickstop()
@@ -129,7 +130,7 @@ void FastStepper_t::set_max_speed(int32_t max_speed)
 
     // On a 16MHz CPU, we can't go faster than 8MSteps/s (but forget about also counting steps at that speed)
     max_speed = min(max_speed, 8000000);
-    
+
     _max_speed = max_speed;
 
     // Limit target_speed to -max_speed..max_speed
@@ -306,7 +307,7 @@ void FastStepper_t::set_speed(int32_t new_speed)
             // Since we're in Fast PWM mode, OCRnA defines TOP. Setting a new OCRnA
             // that is lower than TCNTn will thus set TOVn and reset TCNTn.
             *_OCRnA = top;
-        
+
             _current_speed = new_speed;
         }
     }
